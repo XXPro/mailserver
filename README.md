@@ -34,6 +34,7 @@ Simple and full-featured mail server as a set of multiple docker images includes
 - [Installation](#installation)
 - [Environment variables](#environment-variables)
 - [SSL certificates](#ssl-certificates)
+- [MTA-STS](#mta-sts)
 - [GPG encryption](#automatic-gpg-encryption-of-all-your-e-mails)
 - [Relaying from other networks](#relaying-from-other-networks)
 - [Third-party clamav signature databases](#third-party-clamav-signature-databases)
@@ -191,6 +192,13 @@ Rainloop is a simple, modern and fast webmail with Sieve scripts support (filter
 * Docker image : https://github.com/hardware/rainloop
 * How to setup : [Rainloop initial configuration](https://github.com/hardware/mailserver/wiki/Rainloop-initial-configuration)
 
+#### 3bis - Afterlogic Webmail Lite installation (optional)
+
+According to your preference, you can use Afterlogic Webmail Lite as alternative.
+
+* Docker image : https://github.com/hardware/afterlogic-webmail-lite
+* How to setup : [Afterlogic Webmail Lite initial configuration](https://github.com/hardware/mailserver/wiki/AfterLogic-Webmail-Lite-initial-configuration)
+
 #### 4 - Done, congratulation ! :tada:
 
 At first launch, the container takes few minutes to generate SSL certificates (if needed), DKIM keypair and update clamav database, all of this takes some time (1/2 minutes). This image comes with a snake-oil self-signed certificate, please use your own trusted certificates. [See below](https://github.com/hardware/mailserver#ssl-certificates) for configuration.
@@ -253,6 +261,7 @@ If you use Ansible, I recommend you to go to see [@ksylvan](https://github.com/k
 | **VMAILGID** | vmail group id | *optional* | 1024
 | **VMAIL_SUBDIR** | Individual mailbox' subdirectory | *optional* | mail
 | **OPENDKIM_KEY_LENGTH** | Size of your DKIM RSA key pair | *optional* | 1024
+| **DEBUG_MODE** | Enable Postfix, Dovecot and Rspamd verbose logging | *optional* | false
 | **PASSWORD_SCHEME** | Passwords encryption scheme | *optional* | `SHA512-CRYPT`
 | **DBDRIVER** | Database type: mysql, pgsql | *optional* | mysql
 | **DBHOST** | Database instance ip/hostname | *optional* | mariadb
@@ -281,6 +290,7 @@ If you use Ansible, I recommend you to go to see [@ksylvan](https://github.com/k
 | **FETCHMAIL_INTERVAL** | Fetchmail polling interval | *optional* | 10
 | **RECIPIENT_DELIMITER** | RFC 5233 subaddress extension separator (single character only) | *optional* | +
 
+* Use **DEBUG_MODE** to enable the debug mode. Switch to `true` to enable verbose logging for `postfix`, `dovecot` and `rspamd`. To debug components separately, use this syntax : `DEBUG_MODE=postfix,rspamd`.
 * **VMAIL_SUBDIR** is the mail location subdirectory name `/var/mail/vhosts/%domain/%user/$subdir`. For more information, read this : https://wiki.dovecot.org/VirtualUsers/Home
 * **PASSWORD_SCHEME** for compatible schemes, read this : https://wiki.dovecot.org/Authentication/PasswordSchemes
 * Currently, only a single **RECIPIENT_DELIMITER** is supported. Support for multiple delimiters will arrive with Dovecot v2.3.
@@ -517,6 +527,27 @@ openssl s_client -connect mail.domain.tld:587 -starttls smtp -tlsextdebug
 openssl s_client -connect mail.domain.tld:993 -tlsextdebug
 ```
 
+### MTA-STS
+
+MTA-STS is a new standard that makes it possible to send downgrade-resistant email over SMTP. In that sense, it is like an alternative to DANE but it does this by piggybacking on the browser Certificate Authority model, not DNSSEC.
+
+To enable Strict Transport Security on your mailserver configure the following things :
+
+1. Add a TLSRPT DNS TXT record at `_smtp._tls` on your domain, e.g. `_smtp._tls.domain.tld`, with something like `v=TLSRPTv1; rua=mailto:postmaster@domain.tld`.
+2. Add a MTA-STS DNS TXT record at `_mta-sts` on your domain, e.g. `_mta-sts.domain.tld`, with something like `v=STSv1; id=2018072801`.
+3. Add a subdomain `mta-sts` to your domain (note the lack of an underscore) and serve a policy file on `https://mta-sts.domain.tld/.well-known/mta-sts.txt`.
+
+Here is an example policy file:
+
+```
+version: STSv1
+mode: enforce
+max_age: 10368000
+mx: mail.domain.tld
+```
+
+Test your mail domain using a MTA-STS validator like [Hardenize](https://www.hardenize.com). You can also add your domain name in the [STARTTLS Policy List](https://starttls-everywhere.org/) maintained by [EFF](https://www.eff.org/).
+
 ### Third-party clamav signature databases
 
 [Clamav-unofficial-sigs](https://github.com/extremeshok/clamav-unofficial-sigs) provides a simple way to download and update third-party signature databases provided by Sanesecurity, FOXHOLE, OITC, Scamnailer, BOFHLAND, CRDF, Porcupine, Securiteinfo, MalwarePatrol, Yara-Rules Project, etc.
@@ -533,6 +564,7 @@ Readme : https://github.com/extremeshok/clamav-unofficial-sigs
 #### Enable clamav-unofficial-sigs
 
 Create your `user.conf` file under `/mnt/docker/mail/clamav-unofficial-sigs` directory to configure clamav-unofficial-sigs updater. This file override the default configuration specified in [os.conf](https://github.com/hardware/mailserver/blob/master/rootfs/etc/clamav/unofficial-sigs/os.conf) and [master.conf](https://github.com/hardware/mailserver/blob/master/rootfs/etc/clamav/unofficial-sigs/master.conf). Don't forget, once you have completed the configuration of this file, set the value of `user_configuration_complete` to `yes` otherwise the script will not be able to execute.
+As [Yara rules are broken with clamav ≥ 0.100](https://github.com/extremeshok/clamav-unofficial-sigs/issues/203), we disable Yara rules for now.
 
 ```ini
 # /mnt/docker/mail/clamav-unofficial-sigs/user.conf
@@ -567,11 +599,15 @@ Create your `user.conf` file under `/mnt/docker/mail/clamav-unofficial-sigs` dir
 # - 6. Enter the authorisation signature into the config securiteinfo_authorisation_signature: replacing YOUR-SIGNATURE-NUMBER with your authorisation signature from the link
 # securiteinfo_authorisation_signature="YOUR-SIGNATURE-NUMBER"
 
+# We disable Yara rules for now because they are broken with clamav releases > 0.100
+yararulesproject_enabled="no"
+enable_yararules="no"
+
 # After you have completed the configuration of this file, set the value to "yes"
 user_configuration_complete="yes"
 ```
 
-If the startup script detects this file, clamav-unofficial-sigs is automatically enabled and third-party databases downloaded under `/mnt/docker/mail/clamav` after clamav startup. Once the databases are downloaded, a SIGHUP signal is sent to clamav to load the received signatures :
+If the startup script detects this file, clamav-unofficial-sigs is automatically enabled and third-party databases downloaded under `/mnt/docker/mail/clamav` after clamav startup. Once the databases are downloaded, a SIGUSR2 signal is sent to clamav to reload the signature databases :
 
 ```
 docker logs -f mailserver
@@ -581,8 +617,9 @@ docker logs -f mailserver
 s6-supervise : clamav unofficial signature update running
 s6-supervise : virus database downloaded, spawning clamd process
 [...]
-clamd[xxxxxx]: SIGHUP caught: re-opening log file.
 s6-supervise : clamav unofficial signature update done
+clamd[xxxxxx]: Reading databases from /var/lib/clamav
+clamd[xxxxxx]: Database correctly reloaded (6812263 signatures)
 ```
 
 ### Unbound DNS resolver
@@ -826,9 +863,9 @@ plugin {
 
 - Postfix 3.1.8
 - Dovecot 2.2.27
-- Rspamd 1.7.7
+- Rspamd 1.7.9
 - Fetchmail 6.3.26
-- ClamAV 0.99.4
+- ClamAV 0.100.1
 - Clamav Unofficial Sigs 5.6.2
 - Zeyple 1.2.2
 - Unbound 1.6.0
